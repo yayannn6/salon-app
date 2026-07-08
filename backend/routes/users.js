@@ -37,6 +37,19 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
       return res.status(409).json({ message: 'Username sudah digunakan.' });
     }
 
+    // Pastikan data beautician yang dipilih belum dikaitkan ke user lain (relasi 1-to-1)
+    if (role === 'beautician') {
+      const [dipakai] = await pool.query(
+        'SELECT username FROM users WHERE beautician_id = ?',
+        [beautician_id]
+      );
+      if (dipakai.length > 0) {
+        return res.status(409).json({
+          message: `Data beautician ini sudah memiliki akun (username: ${dipakai[0].username}). Setiap beautician hanya boleh dikaitkan ke 1 akun.`
+        });
+      }
+    }
+
     const hash = await bcrypt.hash(password, 10);
     const [result] = await pool.query(
       'INSERT INTO users (nama, username, password, role, beautician_id) VALUES (?, ?, ?, ?, ?)',
@@ -44,8 +57,29 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
     );
     res.status(201).json({ id: result.insertId, message: 'User berhasil ditambahkan.' });
   } catch (err) {
+    // Jaring pengaman kalau ada 2 request nyaris bersamaan lolos cek di atas (race condition):
+    // UNIQUE constraint di database akan menolaknya di sini.
+    if (err.code === 'ER_DUP_ENTRY' && err.sqlMessage && err.sqlMessage.includes('beautician_id')) {
+      return res.status(409).json({ message: 'Data beautician ini baru saja dikaitkan ke akun lain. Silakan pilih beautician lain.' });
+    }
     console.error(err);
     res.status(500).json({ message: 'Gagal menambahkan user.' });
+  }
+});
+
+// GET /api/users/beautician-tersedia - daftar id beautician yang BELUM punya akun user
+router.get('/beautician-tersedia', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT b.id, b.nama FROM beautician b
+       WHERE b.is_active = 1
+       AND b.id NOT IN (SELECT beautician_id FROM users WHERE beautician_id IS NOT NULL)
+       ORDER BY b.nama`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Gagal mengambil daftar beautician yang tersedia.' });
   }
 });
 
@@ -53,12 +87,29 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
 router.put('/:id', authenticate, authorize('admin'), async (req, res) => {
   try {
     const { nama, is_active, beautician_id } = req.body;
+
+    // Kalau beautician_id diisi, pastikan belum dipakai user LAIN (selain user ini sendiri)
+    if (beautician_id) {
+      const [dipakai] = await pool.query(
+        'SELECT username FROM users WHERE beautician_id = ? AND id != ?',
+        [beautician_id, req.params.id]
+      );
+      if (dipakai.length > 0) {
+        return res.status(409).json({
+          message: `Data beautician ini sudah memiliki akun (username: ${dipakai[0].username}). Setiap beautician hanya boleh dikaitkan ke 1 akun.`
+        });
+      }
+    }
+
     await pool.query(
       'UPDATE users SET nama = ?, is_active = ?, beautician_id = ? WHERE id = ?',
       [nama, is_active ?? 1, beautician_id || null, req.params.id]
     );
     res.json({ message: 'User berhasil diperbarui.' });
   } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY' && err.sqlMessage && err.sqlMessage.includes('beautician_id')) {
+      return res.status(409).json({ message: 'Data beautician ini baru saja dikaitkan ke akun lain. Silakan pilih beautician lain.' });
+    }
     console.error(err);
     res.status(500).json({ message: 'Gagal memperbarui user.' });
   }

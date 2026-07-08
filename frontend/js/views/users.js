@@ -1,5 +1,6 @@
 let _usersCache = [];
-let _usersBeauticianCache = [];
+let _usersBeauticianCache = [];       // semua beautician (dipakai untuk lookup nama di tabel)
+let _beauticianTersediaCache = [];    // hanya beautician yang BELUM punya akun (dipakai di form tambah)
 
 async function renderUsers(container) {
   container.innerHTML = `
@@ -44,8 +45,18 @@ async function loadUsersTable() {
   </table>`;
 }
 
-function openUserForm(id) {
+async function openUserForm(id) {
   const existing = id ? _usersCache.find(u => u.id === id) : null;
+
+  // Untuk form TAMBAH akun baru, ambil daftar beautician yang belum punya akun (real-time)
+  if (!existing) {
+    try {
+      _beauticianTersediaCache = await Api.getBeauticianTersedia();
+    } catch (err) {
+      showToast(err.message, 'error');
+      _beauticianTersediaCache = [];
+    }
+  }
 
   openModal(existing ? 'Ubah Akun' : 'Tambah Akun Baru', `
     <div class="form-group"><label>Nama</label><input type="text" id="f-nama" value="${existing ? escapeHtml(existing.nama) : ''}"></div>
@@ -62,10 +73,17 @@ function openUserForm(id) {
       </div>
       <div class="form-group" id="beautician-select-wrap">
         <label>Data Beautician Terkait</label>
-        <select id="f-beautician-id">
-          <option value="">-- Pilih --</option>
-          ${_usersBeauticianCache.map(b => `<option value="${b.id}">${escapeHtml(b.nama)}</option>`).join('')}
-        </select>
+        ${_beauticianTersediaCache.length === 0 ? `
+          <p class="form-hint" style="color:var(--danger)">
+            Semua data beautician sudah memiliki akun. Tambahkan data beautician baru dulu di menu "Beautician", atau lepas relasi dari akun lain terlebih dahulu.
+          </p>
+        ` : `
+          <select id="f-beautician-id">
+            <option value="">-- Pilih --</option>
+            ${_beauticianTersediaCache.map(b => `<option value="${b.id}">${escapeHtml(b.nama)}</option>`).join('')}
+          </select>
+          <p class="form-hint">Hanya menampilkan beautician yang belum memiliki akun (relasi 1-to-1).</p>
+        `}
       </div>
     ` : `
       <div class="form-group">
@@ -96,6 +114,11 @@ function openUserForm(id) {
         });
       } else {
         const role = document.getElementById('f-role').value;
+        if (role === 'beautician' && _beauticianTersediaCache.length === 0) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Tidak ada data beautician yang tersedia untuk dikaitkan.';
+          return;
+        }
         const payload = {
           nama: document.getElementById('f-nama').value.trim(),
           username: document.getElementById('f-username').value.trim(),
@@ -106,6 +129,11 @@ function openUserForm(id) {
         if (!payload.nama || !payload.username || !payload.password) {
           errorEl.hidden = false;
           errorEl.textContent = 'Nama, username, dan password wajib diisi.';
+          return;
+        }
+        if (role === 'beautician' && !payload.beautician_id) {
+          errorEl.hidden = false;
+          errorEl.textContent = 'Pilih data beautician terkait.';
           return;
         }
         await Api.createUser(payload);

@@ -86,6 +86,7 @@ const Api = {
   bayarTransaksi: (data) => apiRequest('POST', '/transaksi', data),
 
   getUsers: () => apiRequest('GET', '/users'),
+  getBeauticianTersedia: () => apiRequest('GET', '/users/beautician-tersedia'),
   createUser: (data) => apiRequest('POST', '/users', data),
   updateUser: (id, data) => apiRequest('PUT', `/users/${id}`, data),
   resetPassword: (id, password) => apiRequest('PUT', `/users/${id}/password`, { password })
