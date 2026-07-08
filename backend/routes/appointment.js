@@ -120,26 +120,40 @@ router.get('/:id', authenticate, async (req, res) => {
 // }
 //
 // VALIDASI:
-// 1) Kuota maksimal layanan per hari: hitung appointment dgn status
-//    'menunggu' (belum diproses) di tanggal yg sama untuk tiap layanan
-//    yang dipilih. Jika sudah mencapai maksimal_layanan, tolak.
-// 2) Ketersediaan beautician: cek tidak ada appointment lain (status
-//    selain 'batal') milik beautician yang sama pada tanggal yang sama
-//    yang jam-nya beririsan (overlap) dengan slot baru.
+// 1) Kuota maksimal layanan per hari: hitung appointment dengan status
+//    'menunggu' ATAU 'proses' (masih aktif / belum tuntas) di tanggal yang
+//    sama untuk tiap layanan yang dipilih. Jika sudah mencapai
+//    maksimal_layanan, tolak. Slot otomatis kembali tersedia begitu
+//    appointment berstatus 'selesai' atau 'batal' (tidak dihitung lagi).
+// 2) Ketersediaan beautician: cek tidak ada appointment lain dengan status
+//    'menunggu' ATAU 'proses' milik beautician yang sama pada tanggal yang
+//    sama yang jam-nya beririsan (overlap) dengan slot baru. Appointment
+//    yang sudah 'selesai'/'dibayar'/'batal' tidak lagi dianggap menahan slot.
 // ---------------------------------------------------------
 router.post('/', authenticate, authorize('admin'), async (req, res) => {
   const conn = await pool.getConnection();
-  try {
-    const { pelanggan_id, beautician_id, tanggal, jam_mulai, layanan_ids, catatan } = req.body;
+  const { pelanggan_id, beautician_id, tanggal, jam_mulai, layanan_ids, catatan } = req.body;
+  // Nama lock unik per beautician+tanggal, untuk menyerialkan pembuatan
+  // appointment yang bersamaan (mis. 2 request submit hampir berbarengan)
+  // agar tidak ada 2 transaksi yang lolos cek bentrok di waktu yang sama.
+  const lockName = `appt_lock_${beautician_id}_${tanggal}`;
 
+  try {
     if (!pelanggan_id || !beautician_id || !tanggal || !jam_mulai || !Array.isArray(layanan_ids) || layanan_ids.length === 0) {
       conn.release();
       return res.status(400).json({ message: 'Pelanggan, beautician, tanggal, jam mulai, dan minimal 1 layanan wajib diisi.' });
     }
 
+    // Tunggu maksimal 10 detik untuk mendapatkan lock beautician+tanggal ini
+    const [[lockResult]] = await conn.query('SELECT GET_LOCK(?, 10) AS locked', [lockName]);
+    if (!lockResult.locked) {
+      conn.release();
+      return res.status(409).json({ message: 'Sistem sedang memproses appointment lain untuk beautician ini, silakan coba lagi.' });
+    }
+
     await conn.beginTransaction();
 
-    // Ambil detail layanan yang dipilih (lock row untuk konsistensi kuota)
+    // Ambil detail layanan yang dipilih
     const placeholders = layanan_ids.map(() => '?').join(',');
     const [layananRows] = await conn.query(
       `SELECT * FROM layanan WHERE id IN (${placeholders}) AND is_active = 1`,
@@ -148,26 +162,30 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
 
     if (layananRows.length !== layanan_ids.length) {
       await conn.rollback();
+      await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
       conn.release();
       return res.status(400).json({ message: 'Salah satu layanan tidak ditemukan atau sudah tidak aktif.' });
     }
 
     // ============ VALIDASI 1: KUOTA MAKSIMAL LAYANAN PER HARI ============
+    // Dihitung dari appointment berstatus 'menunggu' ATAU 'proses' saja.
+    // Begitu appointment 'selesai' atau 'batal', slotnya otomatis lepas.
     for (const layanan of layananRows) {
       if (layanan.maksimal_layanan > 0) {
         const [[{ jumlah }]] = await conn.query(
           `SELECT COUNT(*) AS jumlah
            FROM appointment_layanan al
            JOIN appointment a ON a.id = al.appointment_id
-           WHERE al.layanan_id = ? AND a.tanggal = ? AND a.status = 'menunggu'`,
+           WHERE al.layanan_id = ? AND a.tanggal = ? AND a.status IN ('menunggu', 'proses')`,
           [layanan.id, tanggal]
         );
 
         if (jumlah >= layanan.maksimal_layanan) {
           await conn.rollback();
+          await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
           conn.release();
           return res.status(409).json({
-            message: `Kuota layanan "${layanan.nama_layanan}" pada tanggal ${tanggal} sudah penuh (maksimal ${layanan.maksimal_layanan} booking/hari, saat ini sudah ${jumlah} appointment menunggu diproses).`
+            message: `Kuota layanan "${layanan.nama_layanan}" pada tanggal ${tanggal} sudah penuh (maksimal ${layanan.maksimal_layanan} booking/hari, saat ini ${jumlah} appointment masih menunggu/diproses).`
           });
         }
       }
@@ -179,20 +197,24 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
     const jamSelesaiEstimasi = tambahMenit(jam_mulai, totalDurasi);
 
     // ============ VALIDASI 2: KETERSEDIAAN BEAUTICIAN (CEK BENTROK JADWAL) ============
+    // Hanya appointment berstatus 'menunggu' ATAU 'proses' yang dianggap
+    // menahan slot waktu beautician. Appointment 'selesai'/'dibayar'/'batal'
+    // tidak lagi menahan slot.
     // Dua rentang waktu [A_mulai, A_selesai) dan [B_mulai, B_selesai) beririsan jika:
     //   A_mulai < B_selesai DAN A_selesai > B_mulai
     const [bentrok] = await conn.query(
       `SELECT id, jam_mulai, jam_selesai_estimasi FROM appointment
-       WHERE beautician_id = ? AND tanggal = ? AND status != 'batal'
+       WHERE beautician_id = ? AND tanggal = ? AND status IN ('menunggu', 'proses')
        AND jam_mulai < ? AND jam_selesai_estimasi > ?`,
       [beautician_id, tanggal, jamSelesaiEstimasi, jam_mulai]
     );
 
     if (bentrok.length > 0) {
       await conn.rollback();
+      await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
       conn.release();
       return res.status(409).json({
-        message: `Beautician tidak tersedia pada jam tersebut. Sudah ada jadwal pukul ${bentrok[0].jam_mulai} - ${bentrok[0].jam_selesai_estimasi} pada tanggal ${tanggal}.`
+        message: `Beautician tidak tersedia pada jam tersebut. Sudah ada jadwal pukul ${formatJamPendek(bentrok[0].jam_mulai)} - ${formatJamPendek(bentrok[0].jam_selesai_estimasi)} pada tanggal ${tanggal}.`
       });
     }
 
@@ -215,6 +237,7 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
     }
 
     await conn.commit();
+    await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
     conn.release();
 
     res.status(201).json({
@@ -225,12 +248,18 @@ router.post('/', authenticate, authorize('admin'), async (req, res) => {
       message: 'Appointment berhasil dibuat.'
     });
   } catch (err) {
-    await conn.rollback();
+    try { await conn.rollback(); } catch (e) { /* abaikan */ }
+    try { await conn.query('SELECT RELEASE_LOCK(?)', [lockName]); } catch (e) { /* abaikan */ }
     conn.release();
     console.error(err);
     res.status(500).json({ message: 'Gagal membuat appointment.' });
   }
 });
+
+// Helper: format "HH:MM:SS" -> "HH:MM" untuk pesan error
+function formatJamPendek(jam) {
+  return jam ? jam.slice(0, 5) : jam;
+}
 
 // ---------------------------------------------------------
 // PUT /api/appointment/:id/status - update status appointment

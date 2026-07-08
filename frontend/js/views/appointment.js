@@ -188,13 +188,18 @@ async function renderServiceChecklist() {
   const listEl = document.getElementById('svc-checklist');
   listEl.innerHTML = `<p class="text-muted" style="font-size:13px">Memuat kuota layanan untuk ${tanggal}...</p>`;
 
-  // Ambil appointment 'menunggu' pada tanggal ini untuk menghitung sisa kuota tiap layanan
-  let apptHariIni = [];
+  // Ambil appointment 'menunggu' & 'proses' pada tanggal ini untuk menghitung sisa kuota tiap layanan
+  // (appointment 'selesai'/'batal' tidak lagi menahan slot)
+  let apptMenunggu = [], apptProses = [];
   try {
-    apptHariIni = await Api.getAppointments({ tanggal, status: 'menunggu' });
+    [apptMenunggu, apptProses] = await Promise.all([
+      Api.getAppointments({ tanggal, status: 'menunggu' }),
+      Api.getAppointments({ tanggal, status: 'proses' })
+    ]);
   } catch (err) {
     // Biarkan tetap tampil meski gagal hitung kuota; validasi final tetap di server
   }
+  const apptHariIni = [...apptMenunggu, ...apptProses];
 
   const pemakaian = {};
   apptHariIni.forEach(a => {
