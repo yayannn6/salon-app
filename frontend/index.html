@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Icy Salon — Sistem Manajemen</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Work+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ============ LOGIN SCREEN ============ -->
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="login-mark">紗</span>
+      <h1>Icy Salon</h1>
+      <p>Sistem manajemen appointment &amp; kasir</p>
+    </div>
+    <form id="login-form">
+      <label>Username
+        <input type="text" id="login-username" required autocomplete="username">
+      </label>
+      <label>Password
+        <input type="password" id="login-password" required autocomplete="current-password">
+      </label>
+      <button type="submit" class="btn btn-primary btn-block">Masuk</button>
+      <p id="login-error" class="error-text" hidden></p>
+    </form>
+    <p class="login-hint"></p>
+  </div>
+</div>
+
+<!-- ============ APP SHELL ============ -->
+<div id="app-shell" class="app-shell" hidden>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <span class="login-mark">紗</span>
+      <span>Icy Salon</span>
+    </div>
+    <nav id="main-nav" class="main-nav"></nav>
+    <div class="topbar-user">
+      <div class="user-chip">
+        <span id="user-nama" class="user-nama"></span>
+        <span id="user-role" class="role-badge"></span>
+      </div>
+      <button id="btn-logout" class="btn btn-ghost">Keluar</button>
+    </div>
+  </header>
+
+  <main id="view-container" class="view-container"></main>
+</div>
+
+<!-- ============ TOAST ============ -->
+<div id="toast" class="toast" hidden></div>
+
+<!-- ============ MODAL ROOT ============ -->
+<div id="modal-root"></div>
+
+<script src="js/api.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/views/dashboard.js"></script>
+<script src="js/views/layanan.js"></script>
+<script src="js/views/pelanggan.js"></script>
+<script src="js/views/beautician.js"></script>
+<script src="js/views/appointment.js"></script>
+<script src="js/views/jadwal.js"></script>
+<script src="js/views/kasir.js"></script>
+<script src="js/views/users.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
